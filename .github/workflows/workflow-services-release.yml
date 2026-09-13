@@ -1,185 +1,114 @@
-name: Release
-
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
+name: Publish application image
 on:
   workflow_call:
     inputs:
       service_name:
         required: true
         type: string
-      build_csharp:
-        required: false
-        type: boolean
-        default: false
-      build_dev:
-        required: false
-        type: boolean
-        default: false
-      unit_tests:
-        required: false
-        type: boolean
-        default: false
-      integration_tests:
-        required: false
-        type: boolean
-        default: false
-    secrets:
-      RELEASE_TOKEN:
-        required: true
-
-
+permissions:
+  contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  IMAGE_NAME_DEV: ${{ github.repository }}-dev
-
+  group: publish-${{ github.repository }}
+  cancel-in-progress: false
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-      with:
-        ref: ${{ github.head_ref }}   # checkout the correct branch name
-        fetch-depth: 0                # fetch the whole repo history
-    - uses: actions/setup-dotnet@v3
-      if: ${{inputs.build_csharp}}
-      with:
-        dotnet-version: '7.x.x'
-    - name: Dotnet build 
-      if: ${{inputs.build_csharp}}
-      run: dotnet build .
-
-  unit:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-      with:
-        ref: ${{ github.head_ref }}   # checkout the correct branch name
-        fetch-depth: 0                # fetch the whole repo history
-    - name: Unit test
-      if: ${{inputs.unit_tests}}
-      run: docker compose -f compose-test.yaml up idealtex.${{ inputs.service_name }}.unittest
-
-  integration:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-      with:
-        ref: ${{ github.head_ref }}   # checkout the correct branch name
-        fetch-depth: 0                # fetch the whole repo history
-    - name: Integration test
-      if: ${{inputs.integration_tests}}
-      run: docker compose -f compose-test.yaml up idealtex.${{ inputs.service_name }}.integrationtest
-
-  tag:
-    needs: [unit, integration]
-    runs-on: ubuntu-latest
-    outputs:
-      new_tag: ${{ steps.version.outputs.version }}
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-      with:
-        ref: ${{ github.head_ref }}   # checkout the correct branch name
-        fetch-depth: 0                # fetch the whole repo history
-    - name: Git Version
-      id: version
-      uses: codacy/git-version@2.7.1
-      with:
-        # The name of the release branch
-        release-branch: main
-    - name: Create tag
-      uses: actions/github-script@v6.4.0
-      with:
-        script: |
-          github.rest.git.createRef({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            ref: 'refs/tags/${{ steps.version.outputs.version }}',
-            sha: context.sha
-          })
-      
+  validation:
+    uses: ./.github/workflows/workflow-services-validation.yml
+    with:
+      service_name: ${{ inputs.service_name }}
   publish:
-    needs: tag
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
+      contents: write
       packages: write
-      contents: read
+      pull-requests: read
     steps:
-      - name: Log in to the Container registry
-        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+      - uses: actions/checkout@v5
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.RELEASE_TOKEN }}
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-      - name: Build and push Docker image
-        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
-        with:
-          push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{needs.tag.outputs.new_tag}}
-          labels: ${{ steps.meta.outputs.labels }}
-      
-  publish_dev:
-    needs: tag
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-      contents: read
-    steps:
-      - name: Log in to the Container registry
-        if: ${{inputs.build_dev}}
-        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.RELEASE_TOKEN }}
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        if: ${{inputs.build_dev}}
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_DEV }}
-      - name: Build and push Docker image
-        if: ${{inputs.build_dev}}
-        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
-        with:
-          push: true
-          file: dockerfile_dev
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_DEV }}:${{needs.tag.outputs.new_tag}}
-          labels: ${{ steps.meta.outputs.labels }}
-        
-  release:
-      needs: [tag, publish, publish_dev]
-      runs-on: ubuntu-latest
-      steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ github.head_ref }}
           fetch-depth: 0
-      - name: update release
-        uses: idealtex/idealtex-workflows@main
+      - name: Reserve or reuse a version
+        id: version
         env:
-          NEW_VERSION: ${{ needs.tag.outputs.new_tag }}
-          SERVICE_NAME: ${{ inputs.service_name }}
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          def run(*args):
+              return subprocess.check_output(args, text=True).strip()
+          def parse(tag):
+              match = re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag)
+              return tuple(map(int, match.groups())) if match else None
+          def bump(version, branch):
+              major, minor, patch = version
+              if branch.startswith("major/"): return major + 1, 0, 0
+              if branch.startswith("feature/"): return major, minor + 1, 0
+              return major, minor, patch + 1
+          assert parse("v1.2.3") == (1, 2, 3) and parse("01.2.3") is None
+          assert bump((1, 2, 3), "feature/a") == (1, 3, 0)
+          assert bump((1, 2, 3), "major/a") == (2, 0, 0)
+          assert bump((1, 2, 3), "main") == (1, 2, 4)
+          run("git", "fetch", "--tags", "origin")
+          sha = os.environ["GITHUB_SHA"]
+          assert run("git", "rev-parse", "HEAD") == sha
+          current = [t for t in run("git", "tag", "--points-at", "HEAD").splitlines() if t.startswith("v") and parse(t)]
+          if len(current) > 1: raise SystemExit("Multiple release tags point to this commit; review manually")
+          if current:
+              tag = current[0]
+          else:
+              tags = [parse(t) for t in run("git", "tag", "--list").splitlines()]
+              latest = max((v for v in tags if v), default=(0, 0, 0))
+              pulls = json.loads(run("gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/commits/{sha}/pulls"))
+              merged = [p for p in pulls if p.get("merged_at") and p["base"]["ref"] == "main"]
+              branch = max(merged, key=lambda p: p["merged_at"])["head"]["ref"] if merged else "main"
+              tag = "v" + ".".join(map(str, bump(latest, branch)))
+              run("git", "config", "user.name", "github-actions[bot]")
+              run("git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+              run("git", "tag", "-a", tag, "-m", f"Release {tag}", sha)
+              run("git", "push", "origin", f"refs/tags/{tag}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"tag={tag}\n")
+          PY
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Protect existing image tags
+        id: image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}
+        run: |
+          if docker manifest inspect "$IMAGE" > /dev/null 2> "$RUNNER_TEMP/manifest-error"; then
+            docker pull "$IMAGE"
+            revision="$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+            test "$revision" = "$GITHUB_SHA" || { echo "Existing tag belongs to another or unverified build" >&2; exit 1; }
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif grep -Eiq 'manifest unknown|no such manifest|not found' "$RUNNER_TEMP/manifest-error"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$RUNNER_TEMP/manifest-error" >&2
+            exit 1
+          fi
+      - uses: docker/build-push-action@v6
+        if: steps.image.outputs.exists != 'true'
+        with:
+          context: .
+          file: ${{ inputs.service_name == 'mono' && 'Dockerfile' || 'dockerfile' }}
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Record published version
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}
+        run: |
+          printf 'Published image: %s\n\nSelect this tag in Dokploy to deploy DEV or PROD.\n' "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
         
       

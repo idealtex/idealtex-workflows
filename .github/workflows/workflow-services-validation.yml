@@ -1,72 +1,43 @@
-name: Release
-
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
+name: Validate application
 on:
   workflow_call:
     inputs:
       service_name:
         required: true
         type: string
-      build_csharp:
-        required: false
-        type: boolean
-        default: false
-      unit_tests:
-        required: false
-        type: boolean
-        default: false
-      integration_tests:
-        required: false
-        type: boolean
-        default: false
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+permissions:
+  contents: read
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-      with:
-        ref: ${{ github.head_ref }}   # checkout the correct branch name
-        fetch-depth: 0                # fetch the whole repo history
-    - uses: actions/setup-dotnet@v3
-      if: ${{inputs.build_csharp}}
-      with:
-        dotnet-version: '7.x.x'
-    - name: Dotnet build 
-      if: ${{inputs.build_csharp}}
-      run: dotnet build .
-
-  unit:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-      with:
-        ref: ${{ github.head_ref }}   # checkout the correct branch name
-        fetch-depth: 0                # fetch the whole repo history
-    - name: Unit test
-      if: ${{inputs.unit_tests}}
-      run: docker compose -f compose-test.yaml up idealtex.${{ inputs.service_name }}.unittest
-
-  integration:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-      with:
-        ref: ${{ github.head_ref }}   # checkout the correct branch name
-        fetch-depth: 0                # fetch the whole repo history
-    - name: Integration test
-      if: ${{inputs.integration_tests}}
-      run: docker compose -f compose-test.yaml up idealtex.${{ inputs.service_name }}.integrationtest
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Validate application identity
+        env:
+          SERVICE_NAME: ${{ inputs.service_name }}
+        run: |
+          case "$SERVICE_NAME" in mono|web-admin|web-public) ;; *) exit 1 ;; esac
+          test -f scripts/ci.sh
+      - uses: actions/setup-dotnet@v5
+        if: inputs.service_name == 'mono'
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v5
+        if: inputs.service_name != 'mono'
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - name: Build and test
+        run: bash scripts/ci.sh
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate container build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.service_name == 'mono' && 'Dockerfile' || 'dockerfile' }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
