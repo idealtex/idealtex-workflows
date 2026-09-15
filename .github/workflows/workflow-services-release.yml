@@ -105,10 +105,22 @@ jobs:
             org.opencontainers.image.version=${{ steps.version.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Update latest image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}
+          LATEST_IMAGE: ghcr.io/${{ github.repository }}:latest
+        run: |
+          git fetch --no-tags origin main
+          if [ "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" ]; then
+            docker buildx imagetools create --prefer-index=false --tag "$LATEST_IMAGE" "$IMAGE"
+            printf 'DEV image: %s\n\n' "$LATEST_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Skipped latest: this commit is no longer the main branch head.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Record published version
         env:
           IMAGE: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}
         run: |
-          printf 'Published image: %s\n\nSelect this tag in Dokploy to deploy DEV or PROD.\n' "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Versioned image: %s\n\nSelect the version tag for PROD or latest for DEV in Dokploy, then deploy manually.\n' "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
         
       
