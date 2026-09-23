@@ -31,4 +31,6 @@ Do not add: quick-read facts; generic language/framework knowledge; one-off task
 
 - Renaming memories: References are updated automatically if handled via Serena's memory rename tool.
 - Checking for stale memories (e.g. after deletion): Call `serena memories check` for a report.
-- Shared workspace guidance must also be saved in each affected repository's `.serena/memories`; the parent workspace `.serena` is not pushed. Preserve repository-specific guidance and do not copy caches or `project.local.yml`.
+- Keep each repository's memories scoped to that repository. Store language, framework and domain rules only where the relevant code lives.
+- Persist genuinely shared guidance only in repositories where it applies; never copy all workspace memories into every project. The parent workspace `.serena` is not pushed.
+- Preserve relevant project-specific guidance and do not copy caches or `project.local.yml`.
